@@ -612,10 +612,30 @@ $("#cartBtn").onclick=()=>toggleCart(true);
 const ADMIN_WHATSAPP_NUMBER = "213667312247";
 const WA_BTN_LABEL = "📲 Partager sur WhatsApp";
 
+async function uploadPreview(blob){
+  const path = `previews/preview-${Date.now()}-${Math.random().toString(36).slice(2,7)}.png`;
+  const { error } = await db.storage.from(LOGO_BUCKET).upload(path, blob, {
+    cacheControl: "3600",
+    contentType: "image/png",
+    upsert: false
+  });
+  if (error) throw error;
+  return db.storage.from(LOGO_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
 async function shareOnWhatsApp(){
   const btn = $("#whatsappShareBtn");
   const {p, size, color, qty, logoType, brandId, text} = pmState;
   const total = qty * p.base_price;
+
+  // Sur mobile, le partage natif enverra le fichier image directement.
+  // Sur desktop, on ouvre l'onglet WhatsApp tout de suite pour éviter le blocage popup.
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  const mayNativeShare = isMobile && typeof navigator.share === "function" && typeof navigator.canShare === "function";
+  const waWindow = mayNativeShare ? null : window.open('', '_blank');
+
+  btn.disabled = true;
+  btn.innerHTML = `<span class="loader"></span> Préparation...`;
 
   let message = `Bonjour, je souhaite commander :\n\n`;
   message += `*${p.name}* (${p.category})\n`;
@@ -629,13 +649,10 @@ async function shareOnWhatsApp(){
     message += `Logo: Personnalisé\n`;
     if (text) message += `Texte à imprimer: "${text}"\n`;
   }
-  message += `\nMerci de confirmer la commande.`;
 
-  const previewElement = document.querySelector('.pm-img');
+  // Aperçu visuel : génération puis hébergement sur Supabase
   let previewBlob = null;
-  btn.disabled = true;
-  btn.innerHTML = `<span class="loader"></span> Préparation...`;
-
+  const previewElement = document.querySelector('.pm-img');
   if (previewElement && typeof html2canvas === "function") {
     try {
       const canvas = await html2canvas(previewElement, {
@@ -645,12 +662,23 @@ async function shareOnWhatsApp(){
         backgroundColor: '#ffffff'
       });
       previewBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-    } catch (error) {
-      console.error("Erreur de génération de l'aperçu:", error);
+      if (previewBlob) {
+        try {
+          const previewUrl = await uploadPreview(previewBlob);
+          message += `\n🖼️ Aperçu du produit :\n${previewUrl}\n`;
+        } catch (e) {
+          console.error("Upload de l'aperçu échoué:", e);
+        }
+      }
+    } catch (e) {
+      console.error("Erreur de génération de l'aperçu:", e);
     }
   }
 
-  if (previewBlob && typeof navigator.share === "function" && typeof navigator.canShare === "function") {
+  message += `\nMerci de confirmer la commande.`;
+
+  // Mobile : partage natif du fichier image (l'aperçu arrive en image dans le chat)
+  if (previewBlob && mayNativeShare) {
     const fileToShare = new File([previewBlob], `apercu-${p.name}.png`, { type: 'image/png' });
     if (navigator.canShare({ files: [fileToShare] })) {
       try {
@@ -668,28 +696,21 @@ async function shareOnWhatsApp(){
           btn.innerHTML = WA_BTN_LABEL;
           return;
         }
-        console.warn("Partage natif échoué, bascule vers WhatsApp Web.", err);
+        console.warn("Partage natif échoué, bascule vers WhatsApp.", err);
       }
     }
   }
 
-  if (previewBlob) {
-    const url = URL.createObjectURL(previewBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `apercu-${p.name.replace(/\s+/g, '-')}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast("L'aperçu a été téléchargé. Joignez-le à votre message WhatsApp.", false);
+  // Desktop / fallback : WhatsApp avec le lien de l'aperçu hébergé
+  const whatsappUrl = `https://api.whatsapp.com/send?phone=${ADMIN_WHATSAPP_NUMBER}&text=${encodeURIComponent(message)}`;
+  if (waWindow && !waWindow.closed) {
+    waWindow.location.href = whatsappUrl;
+  } else if (!window.open(whatsappUrl, '_blank')) {
+    toast("Popup bloquée — autorisez les popups pour ce site.", true);
   }
 
   btn.disabled = false;
   btn.innerHTML = WA_BTN_LABEL;
-
-  const whatsappUrl = `https://api.whatsapp.com/send?phone=${ADMIN_WHATSAPP_NUMBER}&text=${encodeURIComponent(message)}`;
-  window.open(whatsappUrl, '_blank');
 }
 
 renderCart(); loadData();
