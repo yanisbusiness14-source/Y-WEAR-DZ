@@ -103,9 +103,19 @@ footer p{color:#8b8b99;font-size:14px}
 .modal-close{position:absolute;top:14px;right:14px;width:36px;height:36px;border-radius:50%;border:0;background:var(--bg);cursor:pointer;font-size:17px;display:grid;place-items:center;z-index:2}
 
 .pm{display:grid;grid-template-columns:1fr 1fr}
-.pm-img{background:linear-gradient(135deg,#f0f0f3,#e4e4e9);display:grid;place-items:center;min-height:400px}
-.pm-img img{width:100%;height:100%;object-fit:cover}
-.pm-img .ph{font-size:96px;opacity:.45}
+.pm-img{background:linear-gradient(135deg,#f0f0f3,#e4e4e9);display:grid;place-items:center;min-height:400px;position:relative;overflow:hidden}
+.pm-img .product-img{width:100%;height:100%;object-fit:contain;grid-area:1/1}
+.pm-img .ph{font-size:96px;opacity:.45;grid-area:1/1}
+.logo-overlay{
+  position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);
+  max-width:36%;max-height:36%;object-fit:contain;pointer-events:none;z-index:2;
+}
+.logo-text-overlay{
+  position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);
+  max-width:60%;font-weight:900;font-size:26px;color:#0b0b12;text-align:center;
+  pointer-events:none;z-index:2;line-height:1.2;word-break:break-word;
+  text-shadow:0 1px 3px rgba(255,255,255,.8);
+}
 .pm-info{padding:34px 30px;display:flex;flex-direction:column;gap:16px}
 .pm-info h2{font-size:26px;letter-spacing:-1px;font-weight:900}
 .pm-price{font-size:24px;font-weight:900;color:var(--accent)}
@@ -374,11 +384,15 @@ function openProduct(id){
   const p=PRODUCTS.find(x=>x.id===id); if(!p)return;
   const sizes = (p.sizes&&p.sizes.length)?p.sizes:["S","M","L","XL"];
   const colors = (p.colors&&p.colors.length)?p.colors:["Noir","Blanc"];
-  pmState = {p,size:sizes[0],color:colors[0],qty:1,logoType:p.type==='brand'?'brand':'custom',brandId:"",file:null,text:""};
+  pmState = {p,size:sizes[0],color:colors[0],qty:1,logoType:p.type==='brand'?'brand':'custom',brandId:"",file:null,text:"",_previewDataUrl:null};
 
   $("#modalBody").innerHTML = `
     <div class="pm">
-      <div class="pm-img">${p.image_url?`<img src="${esc(p.image_url)}" alt="">`:`<div class="ph">${iconFor(p.category)}</div>`}</div>
+      <div class="pm-img">
+        ${p.image_url?`<img src="${esc(p.image_url)}" alt="" class="product-img">`:`<div class="ph">${iconFor(p.category)}</div>`}
+        <img class="logo-overlay" alt="" style="display:none">
+        <div class="logo-text-overlay" style="display:none"></div>
+      </div>
       <div class="pm-info">
         <span class="cat">${esc(p.category)}</span>
         <h2>${esc(p.name)}</h2>
@@ -430,18 +444,62 @@ function openProduct(id){
     $$("#logoSeg button").forEach(x=>x.classList.toggle("on",x===b));
     $("#customBox").classList.toggle("hidden",pmState.logoType!=='custom');
     $("#brandBox").classList.toggle("hidden",pmState.logoType!=='brand');
+    updateLogoOverlay();
   });
-  $("#logoFile").addEventListener("change",e=>{pmState.file=e.target.files[0]||null;});
-  $("#logoText").addEventListener("input",e=>{pmState.text=e.target.value;});
+  $("#logoFile").addEventListener("change",e=>{
+    pmState.file=e.target.files[0]||null;
+    pmState._previewDataUrl=null;
+    if(pmState.file){
+      const reader=new FileReader();
+      reader.onload=()=>{pmState._previewDataUrl=reader.result;updateLogoOverlay();};
+      reader.readAsDataURL(pmState.file);
+    }
+    updateLogoOverlay();
+  });
+  $("#logoText").addEventListener("input",e=>{pmState.text=e.target.value;updateLogoOverlay();});
   $$("#brandGrid [data-brand]").forEach(btn=>{
     btn.onclick = ()=>{
       pmState.brandId = btn.dataset.brand;
       $$("#brandGrid .brand-card").forEach(x=>x.classList.toggle("on", x===btn));
+      updateLogoOverlay();
     };
   });
   $("#addBtn").onclick=addToCart;
   $("#whatsappShareBtn").onclick=shareOnWhatsApp;
+  updateLogoOverlay();
   openModal("#productModal");
+}
+
+function updateLogoOverlay(){
+  const imgEl = document.querySelector(".pm-img .logo-overlay");
+  const textEl = document.querySelector(".pm-img .logo-text-overlay");
+  if (!imgEl || !textEl) return;
+
+  let imgSrc = null, textContent = null;
+
+  if (pmState.logoType === 'brand' && pmState.brandId) {
+    const brand = BRANDS.find(b => b.id === pmState.brandId);
+    imgSrc = brand?.logo_url || brand?.image_url || brand?.logo || null;
+  } else if (pmState.logoType === 'custom') {
+    if (pmState._previewDataUrl) {
+      imgSrc = pmState._previewDataUrl;
+    } else if (pmState.text && pmState.text.trim()) {
+      textContent = pmState.text.trim();
+    }
+  }
+
+  if (imgSrc) {
+    imgEl.src = imgSrc;
+    imgEl.style.display = 'block';
+    textEl.style.display = 'none';
+  } else if (textContent) {
+    imgEl.style.display = 'none';
+    textEl.textContent = textContent;
+    textEl.style.display = 'block';
+  } else {
+    imgEl.style.display = 'none';
+    textEl.style.display = 'none';
+  }
 }
 
 async function uploadLogo(file){
@@ -603,7 +661,10 @@ async function submitOrder(e){
 }
 
 function openModal(sel){ $("#overlay").classList.add("on"); $(sel).classList.add("on"); document.body.style.overflow="hidden"; }
-function closeAll(){ $("#overlay").classList.remove("on"); $$(".modal").forEach(m=>m.classList.remove("on")); $("#cartDrawer").classList.remove("on"); document.body.style.overflow=""; }
+function closeAll(){
+  if (pmState) pmState._previewDataUrl = null;
+  $("#overlay").classList.remove("on"); $$(".modal").forEach(m=>m.classList.remove("on")); $("#cartDrawer").classList.remove("on"); document.body.style.overflow="";
+}
 $("#overlay").onclick=closeAll;
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeAll();});
 $("#cartBtn").onclick=()=>toggleCart(true);
@@ -628,15 +689,31 @@ async function shareOnWhatsApp(){
   const {p, size, color, qty, logoType, brandId, text} = pmState;
   const total = qty * p.base_price;
 
-  // Sur mobile, le partage natif enverra le fichier image directement.
-  // Sur desktop, on ouvre l'onglet WhatsApp tout de suite pour éviter le blocage popup.
   const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-  const mayNativeShare = isMobile && typeof navigator.share === "function" && typeof navigator.canShare === "function";
-  const waWindow = mayNativeShare ? null : window.open('', '_blank');
+  // Sur desktop : pré-ouvrir un onglet vide pour éviter le blocage popup
+  const waWindow = isMobile ? null : window.open('', '_blank');
 
   btn.disabled = true;
   btn.innerHTML = `<span class="loader"></span> Préparation...`;
 
+  // 1. Générer l'aperçu (t-shirt + logo superposé)
+  let previewBlob = null;
+  const previewElement = document.querySelector('.pm-img');
+  if (previewElement && typeof html2canvas === "function") {
+    try {
+      const canvas = await html2canvas(previewElement, {
+        useCORS: true,
+        allowTaint: false,
+        scale: 2,
+        backgroundColor: '#ffffff'
+      });
+      previewBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    } catch(e) {
+      console.error("Erreur génération aperçu:", e);
+    }
+  }
+
+  // 2. Construire le message
   let message = `Bonjour, je souhaite commander :\n\n`;
   message += `*${p.name}* (${p.category})\n`;
   message += `Taille: ${size} | Couleur: ${color} | Quantité: ${qty}\n`;
@@ -650,60 +727,25 @@ async function shareOnWhatsApp(){
     if (text) message += `Texte à imprimer: "${text}"\n`;
   }
 
-  // Aperçu visuel : génération puis hébergement sur Supabase
-  let previewBlob = null;
-  const previewElement = document.querySelector('.pm-img');
-  if (previewElement && typeof html2canvas === "function") {
+  // 3. Uploader l'aperçu et ajouter le lien au message
+  if (previewBlob) {
     try {
-      const canvas = await html2canvas(previewElement, {
-        useCORS: true,
-        allowTaint: false,
-        scale: 2,
-        backgroundColor: '#ffffff'
-      });
-      previewBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-      if (previewBlob) {
-        try {
-          const previewUrl = await uploadPreview(previewBlob);
-          message += `\n🖼️ Aperçu du produit :\n${previewUrl}\n`;
-        } catch (e) {
-          console.error("Upload de l'aperçu échoué:", e);
-        }
-      }
-    } catch (e) {
-      console.error("Erreur de génération de l'aperçu:", e);
+      const previewUrl = await uploadPreview(previewBlob);
+      message += `\n🖼️ Aperçu du produit :\n${previewUrl}\n`;
+    } catch(e) {
+      console.error("Upload aperçu échoué:", e);
+      toast("Aperçu non envoyé (vérifie les autorisations du bucket).", true);
     }
   }
 
   message += `\nMerci de confirmer la commande.`;
 
-  // Mobile : partage natif du fichier image (l'aperçu arrive en image dans le chat)
-  if (previewBlob && mayNativeShare) {
-    const fileToShare = new File([previewBlob], `apercu-${p.name}.png`, { type: 'image/png' });
-    if (navigator.canShare({ files: [fileToShare] })) {
-      try {
-        await navigator.share({
-          files: [fileToShare],
-          title: `Aperçu de ma commande - ${p.name}`,
-          text: message,
-        });
-        btn.disabled = false;
-        btn.innerHTML = WA_BTN_LABEL;
-        return;
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          btn.disabled = false;
-          btn.innerHTML = WA_BTN_LABEL;
-          return;
-        }
-        console.warn("Partage natif échoué, bascule vers WhatsApp.", err);
-      }
-    }
-  }
-
-  // Desktop / fallback : WhatsApp avec le lien de l'aperçu hébergé
+  // 4. Ouvrir WhatsApp (jamais bloqué sur mobile via location.href)
   const whatsappUrl = `https://api.whatsapp.com/send?phone=${ADMIN_WHATSAPP_NUMBER}&text=${encodeURIComponent(message)}`;
-  if (waWindow && !waWindow.closed) {
+
+  if (isMobile) {
+    window.location.href = whatsappUrl;
+  } else if (waWindow && !waWindow.closed) {
     waWindow.location.href = whatsappUrl;
   } else if (!window.open(whatsappUrl, '_blank')) {
     toast("Popup bloquée — autorisez les popups pour ce site.", true);
