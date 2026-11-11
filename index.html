@@ -181,6 +181,7 @@ textarea{resize:vertical;min-height:82px;font-family:inherit}
   .filters{flex-direction:column;align-items:stretch}
 }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
 
@@ -410,7 +411,10 @@ function openProduct(id){
             ${BRANDS.length ? "" : `<p style="color:var(--muted);font-size:13.5px;margin-top:8px">Aucune marque disponible.</p>`}
           </div>
         </div>
-        <div class="field" style="margin-top:auto"><button class="btn btn-primary btn-block" id="addBtn">Ajouter — <span id="lineTotal">${fmt(p.base_price)}</span></button></div>
+        <div class="field" style="margin-top:auto">
+          <button class="btn btn-primary btn-block" id="addBtn">Ajouter — <span id="lineTotal">${fmt(p.base_price)}</span></button>
+          <button class="btn btn-dark btn-block" id="whatsappShareBtn">📲 Partager sur WhatsApp</button>
+        </div>
       </div>
     </div>`;
 
@@ -436,6 +440,7 @@ function openProduct(id){
     };
   });
   $("#addBtn").onclick=addToCart;
+  $("#whatsappShareBtn").onclick=shareOnWhatsApp;
   openModal("#productModal");
 }
 
@@ -602,6 +607,90 @@ function closeAll(){ $("#overlay").classList.remove("on"); $$(".modal").forEach(
 $("#overlay").onclick=closeAll;
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeAll();});
 $("#cartBtn").onclick=()=>toggleCart(true);
+
+// === PARTAGE WHATSAPP ===
+const ADMIN_WHATSAPP_NUMBER = "213667312247";
+const WA_BTN_LABEL = "📲 Partager sur WhatsApp";
+
+async function shareOnWhatsApp(){
+  const btn = $("#whatsappShareBtn");
+  const {p, size, color, qty, logoType, brandId, text} = pmState;
+  const total = qty * p.base_price;
+
+  let message = `Bonjour, je souhaite commander :\n\n`;
+  message += `*${p.name}* (${p.category})\n`;
+  message += `Taille: ${size} | Couleur: ${color} | Quantité: ${qty}\n`;
+  message += `Prix unitaire: ${fmt(p.base_price)}\n`;
+  message += `*Total: ${fmt(total)}*\n\n`;
+  if (logoType === 'brand') {
+    const brand = BRANDS.find(b => b.id === brandId);
+    message += `Logo: Marque partenaire - ${brand ? brand.name : ''}\n`;
+  } else {
+    message += `Logo: Personnalisé\n`;
+    if (text) message += `Texte à imprimer: "${text}"\n`;
+  }
+  message += `\nMerci de confirmer la commande.`;
+
+  const previewElement = document.querySelector('.pm-img');
+  let previewBlob = null;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="loader"></span> Préparation...`;
+
+  if (previewElement && typeof html2canvas === "function") {
+    try {
+      const canvas = await html2canvas(previewElement, {
+        useCORS: true,
+        allowTaint: false,
+        scale: 2,
+        backgroundColor: '#ffffff'
+      });
+      previewBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    } catch (error) {
+      console.error("Erreur de génération de l'aperçu:", error);
+    }
+  }
+
+  if (previewBlob && typeof navigator.share === "function" && typeof navigator.canShare === "function") {
+    const fileToShare = new File([previewBlob], `apercu-${p.name}.png`, { type: 'image/png' });
+    if (navigator.canShare({ files: [fileToShare] })) {
+      try {
+        await navigator.share({
+          files: [fileToShare],
+          title: `Aperçu de ma commande - ${p.name}`,
+          text: message,
+        });
+        btn.disabled = false;
+        btn.innerHTML = WA_BTN_LABEL;
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          btn.disabled = false;
+          btn.innerHTML = WA_BTN_LABEL;
+          return;
+        }
+        console.warn("Partage natif échoué, bascule vers WhatsApp Web.", err);
+      }
+    }
+  }
+
+  if (previewBlob) {
+    const url = URL.createObjectURL(previewBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `apercu-${p.name.replace(/\s+/g, '-')}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast("L'aperçu a été téléchargé. Joignez-le à votre message WhatsApp.", false);
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = WA_BTN_LABEL;
+
+  const whatsappUrl = `https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
+  window.open(whatsappUrl, '_blank');
+}
 
 renderCart(); loadData();
 </script>
