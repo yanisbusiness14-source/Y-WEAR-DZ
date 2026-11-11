@@ -688,7 +688,7 @@ async function shareOnWhatsApp(){
   btn.disabled = false;
   btn.innerHTML = WA_BTN_LABEL;
 
-  const whatsappUrl = `https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
+  const whatsappUrl = `https://api.whatsapp.com/send?phone=${ADMIN_WHATSAPP_NUMBER}&text=${encodeURIComponent(message)}`;
   window.open(whatsappUrl, '_blank');
 }
 
