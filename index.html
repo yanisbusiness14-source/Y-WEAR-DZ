@@ -696,63 +696,94 @@ async function shareOnWhatsApp(){
   btn.disabled = true;
   btn.innerHTML = `<span class="loader"></span> Préparation...`;
 
-  // 1. Générer l'aperçu (t-shirt + logo superposé)
-  let previewBlob = null;
-  const previewElement = document.querySelector('.pm-img');
-  if (previewElement && typeof html2canvas === "function") {
-    try {
-      const canvas = await html2canvas(previewElement, {
-        useCORS: true,
-        allowTaint: false,
-        scale: 2,
-        backgroundColor: '#ffffff'
-      });
-      previewBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-    } catch(e) {
-      console.error("Erreur génération aperçu:", e);
+  try {
+    // 1. Générer l'aperçu composite (t-shirt + logo superposé)
+    let previewBlob = null;
+    const previewElement = document.querySelector('.pm-img');
+    if (previewElement && typeof html2canvas === "function") {
+      try {
+        // S'assurer que l'image produit ET l'image du logo (si présente) sont chargées
+        const imgEls = previewElement.querySelectorAll('img');
+        await Promise.all([...imgEls].map(i => i.complete ? Promise.resolve() : new Promise(r => { i.onload = i.onerror = r; })));
+        // Laisser le rendu se stabiliser avant la capture
+        await new Promise(r => setTimeout(r, 50));
+        const canvas = await html2canvas(previewElement, {
+          useCORS: true,
+          allowTaint: false,
+          scale: 2,
+          backgroundColor: '#ffffff',
+          logging: false
+        });
+        previewBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      } catch(e) {
+        console.error("Erreur génération aperçu:", e);
+        previewBlob = null;
+      }
     }
-  }
 
-  // 2. Construire le message
-  let message = `Bonjour, je souhaite commander :\n\n`;
-  message += `*${p.name}* (${p.category})\n`;
-  message += `Taille: ${size} | Couleur: ${color} | Quantité: ${qty}\n`;
-  message += `Prix unitaire: ${fmt(p.base_price)}\n`;
-  message += `*Total: ${fmt(total)}*\n\n`;
-  if (logoType === 'brand') {
-    const brand = BRANDS.find(b => b.id === brandId);
-    message += `Logo: Marque partenaire - ${brand ? brand.name : ''}\n`;
-  } else {
-    message += `Logo: Personnalisé\n`;
-    if (text) message += `Texte à imprimer: "${text}"\n`;
-  }
-
-  // 3. Uploader l'aperçu et ajouter le lien au message
-  if (previewBlob) {
-    try {
-      const previewUrl = await uploadPreview(previewBlob);
-      message += `\n🖼️ Aperçu du produit :\n${previewUrl}\n`;
-    } catch(e) {
-      console.error("Upload aperçu échoué:", e);
-      toast("Aperçu non envoyé (vérifie les autorisations du bucket).", true);
+    // 2. Construire le message : détail de la commande + logo choisi
+    let message = `Bonjour, je souhaite commander :\n\n`;
+    message += `*${p.name}* (${p.category})\n`;
+    message += `Taille: ${size} | Couleur: ${color} | Quantité: ${qty}\n`;
+    message += `Prix unitaire: ${fmt(p.base_price)}\n`;
+    message += `*Total: ${fmt(total)}*\n\n`;
+    if (logoType === 'brand') {
+      const brand = BRANDS.find(b => b.id === brandId);
+      message += `Logo: Marque partenaire - ${brand ? brand.name : ''}\n`;
+    } else {
+      message += `Logo: Personnalisé\n`;
+      if (text) message += `Texte à imprimer: "${text}"\n`;
     }
+
+    // 3. Uploader l'aperçu et ajouter le lien public au message
+    let previewUploaded = false;
+    if (previewBlob) {
+      try {
+        const previewUrl = await uploadPreview(previewBlob);
+        message += `\n🖼️ Aperçu du produit :\n${previewUrl}\n`;
+        previewUploaded = true;
+      } catch(err) {
+        console.error("Upload aperçu échoué:", err);
+        toast(uploadError(err), true);
+      }
+    }
+
+    // 4. Fallback : l'admin reçoit toujours au minimum 2 liens cliquables (produit + logo)
+    if (!previewUploaded) {
+      if (p.image_url) message += `\n🖼️ Image du produit :\n${p.image_url}\n`;
+      let logoUrl = "";
+      if (logoType === 'brand') {
+        const brand = BRANDS.find(b => b.id === brandId);
+        logoUrl = brand?.logo_url || brand?.image_url || brand?.logo || "";
+      } else if (pmState.file) {
+        // Logo perso : uploader le fichier pour donner un lien ouvrable à l'admin
+        try {
+          logoUrl = await uploadLogo(pmState.file);
+        } catch(err) {
+          console.error("Upload logo échoué:", err);
+          toast(uploadError(err), true);
+        }
+      }
+      if (logoUrl) message += `\n🎨 Logo :\n${logoUrl}\n`;
+    }
+
+    message += `\nMerci de confirmer la commande.`;
+
+    // 5. Ouvrir WhatsApp directement sur la discussion admin (wa.me : fiable mobile + desktop)
+    const whatsappUrl = 'https://wa.me/' + ADMIN_WHATSAPP_NUMBER + '?text=' + encodeURIComponent(message);
+
+    if (isMobile) {
+      window.location.href = whatsappUrl;
+    } else if (waWindow && !waWindow.closed) {
+      waWindow.location.href = whatsappUrl;
+    } else if (!window.open(whatsappUrl, '_blank')) {
+      toast("Popup bloquée — autorisez les popups pour ce site.", true);
+    }
+  } finally {
+    // 6. Restaurer le bouton quoi qu'il arrive (jamais bloqué sur "Préparation...")
+    btn.disabled = false;
+    btn.innerHTML = WA_BTN_LABEL;
   }
-
-  message += `\nMerci de confirmer la commande.`;
-
-  // 4. Ouvrir WhatsApp (jamais bloqué sur mobile via location.href)
-  const whatsappUrl = `https://api.whatsapp.com/send?phone=${ADMIN_WHATSAPP_NUMBER}&text=${encodeURIComponent(message)}`;
-
-  if (isMobile) {
-    window.location.href = whatsappUrl;
-  } else if (waWindow && !waWindow.closed) {
-    waWindow.location.href = whatsappUrl;
-  } else if (!window.open(whatsappUrl, '_blank')) {
-    toast("Popup bloquée — autorisez les popups pour ce site.", true);
-  }
-
-  btn.disabled = false;
-  btn.innerHTML = WA_BTN_LABEL;
 }
 
 renderCart(); loadData();
